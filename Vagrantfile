@@ -34,6 +34,7 @@ Vagrant.configure("2") do |config|
   config.vm.provider :virtualbox do |vb|
     vb.memory = 8192    # 8 GB
     vb.cpus = 16        # 16 cores
+    vb.customize ["modifyvm", :id, "--natdnshostresolver1", "on"]
   end
 
   # Install the packages and libraries needed by the labs

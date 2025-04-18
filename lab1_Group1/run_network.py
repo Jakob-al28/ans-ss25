@@ -35,7 +35,29 @@ class NetworkTopo(Topo):
 
         Topo.__init__(self)
 
-        # Build the specified network topology here
+        # Add switches
+        s1 = self.addSwitch('s1')
+        s2 = self.addSwitch('s2')
+        s3 = self.addSwitch('s3')  # router
+
+        # Add hosts
+        h1 = self.addHost('h1', ip='10.0.1.2/24', defaultRoute='via 10.0.1.1')
+        h2 = self.addHost('h2', ip='10.0.1.3/24', defaultRoute='via 10.0.1.1')
+        ser = self.addHost('ser', ip='10.0.2.2/24', defaultRoute='via 10.0.2.1')
+        ext = self.addHost('ext', ip='192.168.1.123/24', defaultRoute='via 192.168.1.1')
+
+        # Link options
+        linkopts = dict(bw=15, delay='10ms', use_htb=True)
+
+        # Internal network
+        self.addLink(h1, s1, **linkopts)
+        self.addLink(h2, s1, **linkopts)
+        self.addLink(ser, s2, **linkopts)
+
+        # Router connections
+        self.addLink(s1, s3, **linkopts)  # router port 1
+        self.addLink(s2, s3, **linkopts)  # router port 2
+        self.addLink(ext, s3, **linkopts) # router port 3
 
 def run():
     topo = NetworkTopo()
@@ -55,3 +77,17 @@ def run():
 if __name__ == '__main__':
     setLogLevel('info')
     run()
+
+# How to test:
+# 1. In one Vagrant terminal, run: ryu-manager ryu.app.simple_switch_13
+# 2. In another Vagrant terminal, if not already there, do: cd /vagrant/lab1_Group1
+# 3. Then run the script with: sudo python3 run_network.py
+# Note: If you're running this directly on Linux (not in Vagrant), adjust the path accordingly.
+
+# Inside Mininet do: 
+# mininet> nodes
+# mininet> net
+# mininet> pingall
+
+# As you can see from the pingall command, the network is physically connected, but since the controller only implements basic Layer 2 logic 
+# and does not handle ARP or routing across subnets, most pings will fail until smarter switch/router logic is implemented.
