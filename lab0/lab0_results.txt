@@ -1,0 +1,101 @@
+Grundlegende Mininet-Befehle
+
+Starten und Beenden:
+
+sudo mn 			Standardtopologie (ein Switch, zwei Hosts)
+sudo mn --custom lab0_topo.py --topo lab0topo --link tc 	Starts Our Topology
+exit 				ends Mininet console
+sudo mn -c 			clears all Mininet Components
+Ctrl+C. 			Diese sendet ein Unterbrechungssignal (SIGINT) 
+
+
+Topologie-Optionen:
+sudo mn --topo single,3  		1 Switch 3 Hosts
+sudo mn --topo linear,4 		lineare Topologie 4S 1H
+
+Netzwerktests und Debugging
+h1 ping h2  			 
+pingall   			Führt Ping-Tests zwischen allen Host-Paaren durch
+h1 ping -c 1 h2   				ein Ping-Paket h1 to h2
+h1 ping -c 20 h3  				20pings h1 to h3
+h3 iperf -s &  					Server auf h3
+h1 iperf -c 10.0.0.3 -t 20 			TCP-Test von h1 aus für 20s 
+h3 iperf -s -u &  				UDP-Server auf h3
+h1 iperf -c 10.0.0.3 -u -b 10M -t 20  		UDP-Test h1 20 Sek mit 10Mb/s
+iperf h1 h3
+iperf h1 h3 -u -b 10M -t 20 			UDP-Test
+
+
+
+Performance-Tests:
+sudo mn --test iperf  				Bandbreitentest Hosts
+iperf h1 h2 
+h1 iperf -s & 					Server Host 1 Hintergrund
+iperf h1 h3 -t 20 		 		20-S Bandbreitentest 
+
+Netzwerkanalyse:
+h1 traceroute h2 				Pfad Pakete
+h1 ifconfig -a 					Netzwerkschnittstellen
+s1 ifconfig -a 					Netzwerkschnittstellen Switch 1
+
+OpenFlow und Switch-Management
+Flow-Management:
+dump-flows s1 	 				Flow-Tabellen
+
+Netzwerkmanipulation/Link-Manipulation:
+link s1 h1 down 				Deaktiviert Verbindung
+link s1 h1 up					Aktiviert Verbindung
+sh tc qdisc add dev s1-eth1 root netem delay 100ms 		Verzögerung 100ms
+
+Erweiterte Debugging-Funktionen
+Xterm-Unterstützung:
+sudo mn -x 
+xterm h1 h2 					Xterm-Fenster 
+
+
+Befehle für simultane Tests
+Latency:
+One-way delay for both paths = 10ms + 45ms + 10ms = 65ms
+Predicted Round Trip Time (RTT) for ping = 2 * 65ms = 130ms for both connections
+
+h1 ping 10.0.0.3 -c 20 &			Run pings concurrently(background) 
+h2 ping 10.0.0.4 -c 20
+
+*RESULT*
+--- 10.0.0.3 ping statistics ---
+20 packets transmitted, 20 received, 0% packet loss, time 19072ms
+rtt min/avg/max/mdev = 134.850/145.614/178.222/11.944 ms
+
+Throughput:
+The bottleneck for traffic to h4 is now s2<->h4, with a capacity of 15 Mbps. Predicted throughput (h1->h3 and h2->h4) : 15 Mbps / 2 = 7.5 Mbps.
+h1 -> h3 and h2 -> h4 Simultaneously
+
+Start iperf servers on h4
+h4 iperf -s &
+Start iperf clients on h1 and h2 simultaneously 
+h1 iperf -c 10.0.0.3 -t 20 &
+h2 iperf -c 10.0.0.4 -t 20
+
+*Result -t20*
+Client connecting to 10.0.0.4, TCP port 5001
+TCP window size: 85.3 KByte (default)
+------------------------------------------------------------
+[  1] local 10.0.0.2 port 48304 connected with 10.0.0.4 port 5001
+[ ID] Interval       Transfer     Bandwidth
+[  1] 0.0000-27.3292 sec  18.2 MBytes  5.59 Mbits/sec
+
+*Result -t100*
+Client connecting to 10.0.0.4, TCP port 5001
+TCP window size: 85.3 KByte (default)
+------------------------------------------------------------
+[  1] local 10.0.0.2 port 50292 connected with 10.0.0.4 port 5001
+[ ID] Interval       Transfer     Bandwidth
+[  1] 0.0000-105.3814 sec  90.2 MBytes  7.18 Mbits/sec
+
+*Result all destined to h4*
+Client connecting to 10.0.0.4, TCP port 5001
+TCP window size: 85.3 KByte (default)
+------------------------------------------------------------
+[  1] local 10.0.0.2 port 47370 connected with 10.0.0.4 port 5001
+[ ID] Interval       Transfer     Bandwidth
+[  1] 0.0000-24.0192 sec  8.38 MBytes  2.93 Mbits/sec
