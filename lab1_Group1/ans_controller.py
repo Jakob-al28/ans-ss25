@@ -65,6 +65,8 @@ class LearningSwitch(app_manager.RyuApp):
             2: "10.0.2.1",
             3: "192.168.1.1"
         }
+        self.packet_buffer = {}
+
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         
@@ -195,6 +197,38 @@ class LearningSwitch(app_manager.RyuApp):
                         print(f"[Router] Replied to ARP request for {target_ip}")
                         return
 
+            elif arp_pkt.opcode == arp.ARP_REPLY:
+                # Already learned above, but now handle buffered packet
+                if arp_pkt.src_ip in self.packet_buffer:
+                    buffered_msg, buffered_in_port, buffered_src_ip = self.packet_buffer.pop(arp_pkt.src_ip)
+                    
+                    router_mac = self.port_to_own_mac[in_port]
+                    dst_mac = arp_pkt.src_mac
+
+                    actions = [
+                        ofpparser.OFPActionSetField(eth_src=router_mac),
+                        ofpparser.OFPActionSetField(eth_dst=dst_mac),
+                        ofpparser.OFPActionOutput(in_port)
+                    ]
+
+                    match = ofpparser.OFPMatch(
+                        eth_type=0x0800,
+                        ipv4_dst=arp_pkt.src_ip,
+                        ipv4_src=buffered_src_ip
+                    )
+
+                    self.add_flow(datapath, 1, match, actions)
+
+                    out = ofpparser.OFPPacketOut(
+                        datapath=datapath,
+                        buffer_id=ofp.OFP_NO_BUFFER,
+                        in_port=buffered_in_port,
+                        actions=actions,
+                        data=buffered_msg.data
+                    )
+                    datapath.send_msg(out)
+                    print(f"[Router] Sent buffered packet to {arp_pkt.src_ip}")
+                    
         # Check if it's an IPv4 packet
         ip_pkt = pkt.get_protocol(ipv4.ipv4)
         
@@ -293,7 +327,7 @@ class LearningSwitch(app_manager.RyuApp):
 
         else:
             print(f"[Router] Don't know MAC for {dst_ip} yet, waiting for ARP.")
-
+            self.packet_buffer[dst_ip] = (msg, in_port, src_ip)
             # Send an ARP request to discover the MAC address
             dst_ip_obj = ipaddress.ip_address(dst_ip)
 
