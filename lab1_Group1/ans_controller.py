@@ -18,33 +18,31 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.controller.controller import Datapath
-from ryu.ofproto import ofproto_v1_3, ofproto_v1_3_parser
+from ryu.ofproto import ofproto_v1_3
 from ryu.lib.packet import *
 from datetime import datetime, timedelta
 from ipaddress import IPv4Address, IPv4Network
 
-IP_ADDRESSES = {
+
+port_to_own_ip = {
     1: IPv4Address("10.0.1.1"),
     2: IPv4Address("10.0.2.1"),
     3: IPv4Address("192.168.1.1"),
 }
 
-IP_RANGES = {
+port_to_subnet = {
     1: IPv4Network("10.0.1.0/24"),
     2: IPv4Network("10.0.2.0/24"),
     3: IPv4Network("192.168.1.0/24"),
 }
 
-MAC_ADDRESSES = {
+port_to_own_mac = {
     1: "00:00:00:00:01:01",
     2: "00:00:00:00:01:02",
     3: "00:00:00:00:01:03",
 }
 
-TTL_SECONDS = 20 # 20 seconds TTL since its easier to test with a short TTL. Usual TTL should be around 300 seconds
-
-FLOOD_MAC = "ff:ff:ff:ff:ff:ff"
+flood_mac = "ff:ff:ff:ff:ff:ff"
 
 
 class LearningSwitch(app_manager.RyuApp):
@@ -55,22 +53,28 @@ class LearningSwitch(app_manager.RyuApp):
 
         self.mac_addresses = dict()
         self.port_mac_map = dict()
-
+        
+    # This decorator is triggered, when the switch connects and sends its feature info.        
     @set_ev_cls(ofp_event.EventOFPSwitchFeatures, CONFIG_DISPATCHER)
     def switch_features_handler(self, ev):
         # Retrieve OpenFlow protocol version and parser from the datapath
+        # The datapath is the switch that the controller is connected to
+        # The feature info includes the switch's capabilities, such as the number of ports and and datapath id.
         datapath = ev.msg.datapath
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
 
         # Initial flow entry for matching misses
+        # If a packet doesn’t match any other rule, it will be sent to the controller
         match = parser.OFPMatch()
         actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
                                           ofproto.OFPCML_NO_BUFFER)]
-        # Adds a flow entry to send packets to the controller for further processing
+        # Adds a flow rule to send packets to the controller for further processing
+        # One example of a rule: send a packet out port 2 if the destination MAC is 00:00:00:00:01:02        
         self.add_flow(datapath, match, actions, priority=0) 
 
     # Add a flow entry to the flow-table
+    # The flow table is a set of rules that the switch uses to determine how to handle packets
     def add_flow(self, datapath, match, actions, **kwargs):
         ofproto = datapath.ofproto
         parser = datapath.ofproto_parser
@@ -96,7 +100,7 @@ class LearningSwitch(app_manager.RyuApp):
                 datapath=datapath, 
                 buffer_id=ofp.OFP_NO_BUFFER, 
                 in_port=ofp.OFPP_CONTROLLER,
-                actions=[ofp_parser.OFPActionOutput(out_port)],
+                actions=[ofp_parser.OFPActionOutput(out_port)], # Forward the serialized packet out the specified switch port
                 data=data
             )
         )
@@ -125,10 +129,10 @@ class LearningSwitch(app_manager.RyuApp):
         print(datapath.id, datetime.now(), "ETHERNET", eth_pkt.src, eth_pkt.dst)
 
         # Update port mapping for source MAC address
-        self.port_mac_map[eth_pkt.src] = (in_port, datetime.now() + timedelta(seconds=TTL_SECONDS))
+        self.port_mac_map[eth_pkt.src] = (in_port, datetime.now() + timedelta(5))
 
         # Check if packet is a broadcast
-        if eth_pkt.dst == FLOOD_MAC:
+        if eth_pkt.dst == flood_mac:
             self._handle_broadcast(datapath, pkt, ofp, ofp_parser)
             return
 
@@ -154,7 +158,7 @@ class LearningSwitch(app_manager.RyuApp):
         self.forward_packet(datapath, ofp.OFPP_FLOOD, pkt) # Flood packet to all ports
         self.add_flow(
             datapath,
-            ofp_parser.OFPMatch(eth_dst=FLOOD_MAC), # Match broadcast packets
+            ofp_parser.OFPMatch(eth_dst=flood_mac), # Match broadcast packets
             [ofp_parser.OFPActionOutput(ofp.OFPP_FLOOD)],
             priority=1
         )
@@ -176,20 +180,20 @@ class LearningSwitch(app_manager.RyuApp):
         if out_port != datapath.ofproto.OFPP_FLOOD and eth_pkt.dst in self.port_mac_map:
             # Install flow to return packet to the source port
             self.add_flow(datapath, ofp_parser.OFPMatch(eth_dst=eth_pkt.src), [
-                ofp_parser.OFPActionOutput(in_port)], priority=1, hard_timeout=10)
+                ofp_parser.OFPActionOutput(in_port)], priority=1, hard_timeout=5)
             # Install flow to forward packet to the destination port
             self.add_flow(datapath, ofp_parser.OFPMatch(eth_dst=eth_pkt.dst), [
-                ofp_parser.OFPActionOutput(out_port)], priority=1, hard_timeout=10)
+                ofp_parser.OFPActionOutput(out_port)], priority=1, hard_timeout=5)
 
 
     # Handles ARP requests and replies, updating the MAC-to-IP mapping
     def _handle_arp(self, datapath, pkt, in_port, eth_pkt, arp_pkt):
         print(datapath.id, datetime.now(), "ARP", arp_pkt.src_ip, arp_pkt.dst_ip)
         self.mac_addresses[IPv4Address(arp_pkt.src_ip)] = (
-            arp_pkt.src_mac, datetime.now() + timedelta(seconds=TTL_SECONDS)) # Update MAC-to-IP mapping
+            arp_pkt.src_mac, datetime.now() + timedelta(5)) # Update MAC-to-IP mapping
 
         # Respond to ARP request directed to router IP
-        if arp_pkt.opcode == arp.ARP_REQUEST and IPv4Address(arp_pkt.dst_ip) == IP_ADDRESSES[in_port]:
+        if arp_pkt.opcode == arp.ARP_REQUEST and IPv4Address(arp_pkt.dst_ip) == port_to_own_ip[in_port]:
             self._send_arp_reply(datapath, in_port, eth_pkt, arp_pkt)  # Send ARP reply to the requester
 
 
@@ -197,16 +201,16 @@ class LearningSwitch(app_manager.RyuApp):
     def _send_arp_reply(self, datapath, in_port, eth_pkt, arp_pkt):
         response_pkt = packet.Packet()
         response_pkt.add_protocol(
-            ethernet.ethernet(
-                src=MAC_ADDRESSES[in_port], 
+            ethernet.ethernet(  # Ethernet header, used to encapsulate the ARP packet so the switch can read and learn the MAC address
+                src=port_to_own_mac[in_port], 
                 dst=eth_pkt.src, 
                 ethertype=eth_pkt.ethertype)
         )
         response_pkt.add_protocol(
             arp.arp(
                 opcode=arp.ARP_REPLY, # ARP reply message
-                src_mac=MAC_ADDRESSES[in_port], # Router's MAC address
-                src_ip=IP_ADDRESSES[in_port], # Router's IP address
+                src_mac=port_to_own_mac[in_port], # Router's MAC address
+                src_ip=port_to_own_ip[in_port], # Router's IP address
                 dst_mac=arp_pkt.src_mac, # Sender's MAC address
                 dst_ip=arp_pkt.src_ip)  # Sender's IP address
         )
@@ -224,18 +228,18 @@ class LearningSwitch(app_manager.RyuApp):
             return  # TTL expired
         
         # Determine the source and destination port based on IP ranges
-        src_port, src_subnet = next(filter(lambda item: source in item[1], IP_RANGES.items()))
-        dst_port, dst_subnet = next(filter(lambda item: destination in item[1], IP_RANGES.items()))
+        src_port, src_subnet = next(filter(lambda item: source in item[1], port_to_subnet.items())) # the in method checks for subnet membership
+        dst_port, dst_subnet = next(filter(lambda item: destination in item[1], port_to_subnet.items())) # The filter maps through all items and returns the first match due to the next function
 
         # Update MAC mapping from IP address
-        if source in IP_RANGES[in_port]:
-            self.mac_addresses[source] = (eth_pkt.src, datetime.now() + timedelta(seconds=TTL_SECONDS))
+        if source in port_to_subnet[in_port]:
+            self.mac_addresses[source] = (eth_pkt.src, datetime.now() + timedelta(5))
 
         if not self._should_process_packet(eth_pkt, src_port, dst_port, pkt):
             return # Skip packet if conditions to process it are not met
 
         # Handle ICMP to router
-        if destination == IP_ADDRESSES[dst_port]:
+        if destination == port_to_own_ip[dst_port]:
             self._handle_icmp_to_router(pkt, dst_port, dst_subnet, source, ip_pkt, eth_pkt)
             self.forward_packet(datapath, dst_port, pkt) # Forward ICMP response back to the sender
         else:
@@ -246,12 +250,13 @@ class LearningSwitch(app_manager.RyuApp):
 
     # Checks if the packet should be processed based on source, destination, and ICMP conditions
     def _should_process_packet(self, eth_pkt, src_port, dst_port, pkt):
-        if eth_pkt.dst != MAC_ADDRESSES[src_port]: # Check if destination MAC matches the expected port
-            return False
-        if {src_port, dst_port} == {2, 3}:  # Block communication between hosts
+        if eth_pkt.dst != port_to_own_mac[src_port]: # Check if destination MAC matches the expected port
+            return False    # Blocks all pings to non local gateways, rule only applies to IP packets because call stack comes from _handle_ip
+        if {src_port, dst_port} == {2, 3}:  # Block communication between server and external
             return False
         icmp_pkt = pkt.get_protocol(icmp.icmp)
         # Block ICMP Echo Request from source port 1 to router on port 3
+        # The set operation allows all combinations of source and destination ports for ext to be blocked
         if ({src_port, dst_port} == {1, 3} and 
             icmp_pkt is not None and 
             icmp_pkt.type == icmp.ICMP_ECHO_REQUEST):
@@ -287,15 +292,15 @@ class LearningSwitch(app_manager.RyuApp):
                     dst_port, dst_mac, ofp_parser) # Install flow rule for the known destination
                 eth_pkt.dst = dst_mac # Set destination MAC to the known MAC
             else:
-                eth_pkt.dst = FLOOD_MAC # Use flood MAC if the MAC entry is expired
+                eth_pkt.dst = flood_mac # Use flood MAC if the MAC entry is expired
                 del self.mac_addresses[destination] 
         else:
-            eth_pkt.dst = FLOOD_MAC # Use flood MAC if destination MAC is unknown
+            eth_pkt.dst = flood_mac # Use flood MAC if destination MAC is unknown
         
-        eth_pkt.src = MAC_ADDRESSES[dst_port] # Set the source MAC address
+        eth_pkt.src = port_to_own_mac[dst_port] # Set the source MAC address
         self.forward_packet(datapath, dst_port, pkt) # Forward the packet to the destination port
         
-        if eth_pkt.dst == FLOOD_MAC:
+        if eth_pkt.dst == flood_mac:
             self._send_arp_request(datapath, dst_port, destination) # Send ARP request if MAC is unknown
 
 
@@ -308,10 +313,10 @@ class LearningSwitch(app_manager.RyuApp):
             ipv4_dst=destination # Match destination IP
         ), [
             ofp_parser.OFPActionDecNwTtl(), # Decrement TTL for the packet
-            ofp_parser.OFPActionSetField(eth_src=MAC_ADDRESSES[dst_port]), # Set source MAC
+            ofp_parser.OFPActionSetField(eth_src=port_to_own_mac[dst_port]), # Set source MAC
             ofp_parser.OFPActionSetField(eth_dst=dst_mac), # Set destination MAC
             ofp_parser.OFPActionOutput(dst_port), # Output to the destination port
-        ], hard_timeout=10) # Set flow timeout
+        ], hard_timeout=5) # Set flow timeout
 
 
     # Send ARP request if the destination MAC is unknown
@@ -319,13 +324,13 @@ class LearningSwitch(app_manager.RyuApp):
         arp_request_pkt = packet.Packet()
         arp_request_pkt.add_protocol(
             ethernet.ethernet(
-                src=MAC_ADDRESSES[dst_port], 
+                src=port_to_own_mac[dst_port], 
                 ethertype=ethernet.ether.ETH_TYPE_ARP) # Set the Ethernet type to ARP
         )
         arp_request_pkt.add_protocol(
             arp.arp(
-                src_mac=MAC_ADDRESSES[dst_port], # Set the source MAC address
-                src_ip=IP_ADDRESSES[dst_port], # Set the source IP address
+                src_mac=port_to_own_mac[dst_port], # Set the source MAC address
+                src_ip=port_to_own_ip[dst_port], # Set the source IP address
                 dst_ip=destination) # Set the destination IP address
         )
         self.forward_packet(datapath, dst_port, arp_request_pkt) # Forward the ARP request
