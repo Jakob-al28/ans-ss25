@@ -18,7 +18,7 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
-from ryu.ofproto import ofproto_v1_3
+from ryu.ofproto import ofproto_v1_3, inet
 from ryu.lib.packet import *
 from datetime import datetime, timedelta
 from ipaddress import IPv4Address, IPv4Network
@@ -225,6 +225,7 @@ class LearningSwitch(app_manager.RyuApp):
 
         ip_pkt.ttl -= 1
         if ip_pkt.ttl == 0:
+            self._send_icmp_time_exceeded(datapath, in_port, eth_pkt, ip_pkt)
             return  # TTL expired
         
         # Determine the source and destination port based on IP ranges
@@ -334,3 +335,27 @@ class LearningSwitch(app_manager.RyuApp):
                 dst_ip=destination) # Set the destination IP address
         )
         self.forward_packet(datapath, dst_port, arp_request_pkt) # Forward the ARP request
+
+    # Send ICMP Time Exceeded message to the sender when TTL expires
+    def _send_icmp_time_exceeded(self, datapath, in_port, eth_pkt, ip_pkt):
+        print(datapath.id, datetime.now(), "ICMP Time Exceeded: TTL=0 from", ip_pkt.src)
+        # Ethernet layer
+        reply = packet.Packet()
+        reply.add_protocol(ethernet.ethernet(
+            src=port_to_own_mac[in_port], 
+                dst=eth_pkt.src, 
+                ethertype=eth_pkt.ethertype))
+        # IP layer
+        reply.add_protocol(ipv4.ipv4(
+            src=port_to_own_ip[in_port],
+            dst=ip_pkt.src,
+            proto=inet.IPPROTO_ICMP,
+            ttl=64))
+        # ICMP Time Exceeded
+        reply.add_protocol(icmp.icmp(
+            type_=icmp.ICMP_TIME_EXCEEDED,
+            code=0,
+            csum=0,
+            data=icmp.TimeExceeded(data=b"")))
+
+        self.forward_packet(datapath, in_port, reply.serialize())
